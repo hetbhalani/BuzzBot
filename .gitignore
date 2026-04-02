@@ -1,0 +1,8 @@
+project.docx
+buzzbot-key.pem
+.venv
+.env
+test.ipynb
+test.py
+__pycache__/
+*.pyc
