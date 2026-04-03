@@ -4,6 +4,7 @@ import json
 import os
 from botocore.exceptions import ClientError
 from pipelines.tavily_search_tool import tavily_search
+from bot.telegram_bot import select_articles_via_telegram
 
 BUCKET_NAME = os.environ.get("BUCKET_NAME")
 
@@ -18,9 +19,13 @@ def s3_post():
 
 
     data = tavily_search.invoke({"query": "", "days_back": 1})
+    selected_articles = select_articles_via_telegram(data)
 
     # print("=======================")
-    # print(data)
+    # print(data)    
+    # print(type(data))
+
+    data = selected_articles
     
     s3.put_object(
         Bucket=BUCKET_NAME,
