@@ -7,3 +7,4 @@ test.py
 __pycache__/
 *.pyc
 s3_output.json
+project.md

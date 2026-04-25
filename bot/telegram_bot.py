@@ -9,7 +9,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def select_articles_via_telegram(articles: list[dict]) -> list[dict]:
+def select_articles_via_telegram(articles: list[dict], mode: str = "daily", required_count: int = 5) -> list[dict]:
     try:
         if not articles:
             return []
@@ -41,16 +41,27 @@ def select_articles_via_telegram(articles: list[dict]) -> list[dict]:
                     else:
                         article_lines.append(f"{i + 1}. {safe_title}\n")
 
-                lines = [
-                    "📰 Daily AI News Curator",
-                    "",
-                    "Review the stories below and tap to select the ones you want to keep.",
-                    "Use Select All or Clear when needed, then press Save & Finish.",
+                if mode == "weekly":
+                    header = [
+                        "🏆 Weekly Top 10 Review",
+                        "",
+                        f"Please select exactly {required_count} articles to feature in the newsletter.",
+                    ]
+                else:
+                    header = [
+                        "📰 Daily AI News Curator",
+                        "",
+                        "Review the stories below and tap to select the ones you want to keep.",
+                    ]
+                    
+                lines = header + [
                     "",
                     f"📚 Total stories: {len(articles)}\n",
                     *article_lines,
                 ]
+                
                 return "\n".join(lines)
+
             except Exception as e:
                 print(e)
                 return "No articles available."
@@ -113,6 +124,12 @@ def select_articles_via_telegram(articles: list[dict]) -> list[dict]:
                 await query.answer()
 
                 if query.data == "done":
+                    if mode == "weekly" and required_count and len(selected) != required_count:
+                        await query.answer(f"⚠️ Please select exactly {required_count} articles! You have {len(selected)}.", 
+                            show_alert=True
+                        )
+                        return
+                        
                     chosen = [articles[i] for i in sorted(selected)]
                     chosen_articles.clear()
                     chosen_articles.extend(chosen)
