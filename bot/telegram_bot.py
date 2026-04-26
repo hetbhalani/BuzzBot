@@ -1,8 +1,17 @@
 import os
 import html
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+from pipelines.edit_draft_post_w_prompt import edit_draft_post_w_prompt
 
 load_dotenv()
 
@@ -178,3 +187,179 @@ def select_articles_via_telegram(articles: list[dict], mode: str = "daily", requ
     except Exception as e:
         print(e)
         return []
+
+WAITING_FOR_PROMPT = 1  # bot is waiting for the user to type a prompt
+WAITING_FOR_EDIT = 2    # bot is waiting for the user to send back the edited post
+WAITING_FOR_EDIT_CONFIRM = 3  # bot is waiting for the user to confirm the edit
+
+# Review the draft post and decide the next move
+def review_post_via_telegram(state: dict) -> dict:
+
+    draft = state["draft_post"]
+    result: dict = {}     
+
+    def build_review_text() -> str:
+        return (
+            "📝 <b>Review Your Draft LinkedIn Post</b>\n\n"
+            f"{html.escape(draft)}\n\n"
+            "Choose an action below:"
+        )
+
+    def build_review_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔄 Reprompt LLM", callback_data="prompt_llm"),
+                InlineKeyboardButton("✏️ Edit Post",    callback_data="edit_post"),
+            ],
+            [
+                InlineKeyboardButton("🚀 Post", callback_data="post"),
+            ],
+        ])
+
+    async def send_draft(app: Application):
+        await app.bot.send_message(
+            chat_id=CHAT_ID,
+            text=build_review_text(),
+            reply_markup=build_review_keyboard(),
+            parse_mode="HTML",
+        )
+        print("Draft sent to telegram")
+
+    async def handle_action_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        query = update.callback_query
+        await query.answer()
+
+        if query.data == "prompt_llm":
+            await query.edit_message_reply_markup(reply_markup=None) # remove buttons
+            await query.message.reply_text(
+                "✍️ Please type your prompt / instructions for the LLM and send it as a message:"
+            )
+            # move to the next state
+            return WAITING_FOR_PROMPT
+
+        if query.data == "edit_post":
+            await query.edit_message_reply_markup(reply_markup=None)
+
+            copy_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 Copy Draft", copy_text=CopyTextButton(text=draft))]
+            ])
+
+            await query.message.reply_text(
+                "✏️ Tap <b>Copy Draft</b> below to copy the post to your clipboard.\n"
+                "Then paste it here, make your edits, and send it back!",
+                reply_markup=copy_keyboard,
+                parse_mode="HTML",
+            )
+            return WAITING_FOR_EDIT
+
+        if query.data == "post":
+            await query.edit_message_text("✅ Post approved! Proceeding to publish...")
+            result["approve_status"] = "post"
+            context.application.stop_running()
+            return ConversationHandler.END
+
+    async def receive_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        user_prompt = update.message.text.strip()
+
+        await update.message.reply_text(
+            f"⚙️ Got it! Sending your prompt to the LLM...\n\n"
+            f"<i>Prompt: {html.escape(user_prompt)}</i>",
+            parse_mode="HTML",
+        )
+
+        # call the editing pipeline
+        edited = edit_draft_post_w_prompt(
+            instruction=user_prompt,
+            draft_post=draft,
+        )
+
+        result["approve_status"] = "prompt_llm"
+        result["user_prompt"]     = user_prompt
+        result["edited_response"] = edited
+
+        # show the edited post back to the user
+        await update.message.reply_text(
+            f"✅ <b>Edited Post:</b>\n\n{html.escape(edited)}",
+            parse_mode="HTML",
+        )
+
+        context.application.stop_running()
+        return ConversationHandler.END
+
+    async def receive_edited_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        final_post = update.message.text.strip()
+
+        context.user_data["pending_edited_post"] = final_post
+
+        confirm_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Confirm",   callback_data="confirm_edit"),
+                InlineKeyboardButton("🔁 Re-edit",  callback_data="redo_edit"),
+            ]
+        ])
+
+        await update.message.reply_text(
+            f"📋 <b>Here is your edited post</b>\n\n{html.escape(final_post)}",
+            reply_markup=confirm_keyboard,
+            parse_mode="HTML",
+        )
+        return WAITING_FOR_EDIT_CONFIRM
+
+    async def handle_edit_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        query = update.callback_query
+        await query.answer()
+
+        if query.data == "confirm_edit":
+            final_post = context.user_data.get("pending_edited_post", "")
+            result["approve_status"] = "edit_post"
+            result["edited_response"] = final_post
+
+            await query.edit_message_text(
+                f"✅ <b>Saved! Here is your final post:</b>\n\n{html.escape(final_post)}",
+                parse_mode="HTML",
+            )
+            context.application.stop_running()
+            return ConversationHandler.END
+
+        if query.data == "redo_edit":
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(
+                "✍️ No problem! Please send back the updated version of the post:"
+            )
+            return WAITING_FOR_EDIT
+
+
+    conv_handler = ConversationHandler(
+        # The conversation starts when a button is pressed
+        entry_points=[CallbackQueryHandler(handle_action_button)],
+        states={
+            # Waiting for the user to type an LLM instruction
+            WAITING_FOR_PROMPT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_prompt)
+            ],
+            # Waiting for the user to paste their manually edited post
+            WAITING_FOR_EDIT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_edited_post)
+            ],
+            # Waiting for the user to confirm or re-edit
+            WAITING_FOR_EDIT_CONFIRM: [
+                CallbackQueryHandler(handle_edit_confirmation)
+            ],
+        },
+        fallbacks=[],
+    )
+
+    # start running the bot
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(send_draft)
+        .build()
+    )
+    app.add_handler(conv_handler)
+
+    print("Bot running...")
+    app.run_polling()
+
+    # merge result back into the original state and return
+    return {**state, **result}
