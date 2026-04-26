@@ -1,10 +1,13 @@
 import datetime
 from typing import Optional, TypedDict
 from langgraph.graph import END, START, StateGraph
-from bot.telegram_bot import select_articles_via_telegram
+from bot.telegram_bot import select_articles_via_telegram, review_post_via_telegram
 from pipelines.tavily_search_tool import tavily_search
 from storage.s3_client import s3_post, s3_get
 from pipelines.news_ranker import news_ranker
+from pipelines.draft_post import draft_post
+from pipelines.post_the_post import post_the_post
+
 
 class State(TypedDict):
     today: str
@@ -26,6 +29,8 @@ class WeeklyPipelineState(TypedDict):
     approve_status: Optional[str]
     user_prompt: Optional[str]
     edited_response: Optional[str]
+    final_post: Optional[str]
+    post_status: Optional[dict]
 
 
 def chose_the_graph(state: State):
@@ -85,6 +90,27 @@ def final_selection(state: WeeklyPipelineState):
 
     return {"final_news": final_news}
 
+def make_linkedin_post(state: WeeklyPipelineState):
+    draft = draft_post(state)
+
+    return {"draft_post": draft}
+
+def review_post(state: WeeklyPipelineState):
+    updated_state = review_post_via_telegram(state)
+
+    approve_status = updated_state.get("approve_status")
+
+    if approve_status == "post":
+        final_post = updated_state["draft_post"] # original draft as it is
+    else:
+        final_post = updated_state.get("edited_response", updated_state["draft_post"])  # LLM or manual edit
+
+    return {**updated_state, "final_post": final_post}
+
+def post_to_linkedin(state: WeeklyPipelineState):
+    result = post_the_post(state["final_post"])
+    return {"post_status": result}
+
 # Main Workflow
 graph = StateGraph(State)
 
@@ -108,6 +134,21 @@ weeklyGraph = StateGraph(WeeklyPipelineState)
 
 weeklyGraph.add_node('weekly_s3_get', weekly_s3_get)
 weeklyGraph.add_node('deduplicate_news', deduplicate_news)
+weeklyGraph.add_node('rank_articals', rank_articals)
+weeklyGraph.add_node('final_selection',final_selection)
+weeklyGraph.add_node('make_linkedin_post', make_linkedin_post)
+weeklyGraph.add_node('review_post', review_post)
+weeklyGraph.add_node('post_to_linkedin', post_to_linkedin)
+
+
+weeklyGraph.add_edge(START, 'weekly_s3_get')
+weeklyGraph.add_edge('weeklyGraph.add_edge','deduplicate_news')
+weeklyGraph.add_edge('deduplicate_news', 'rank_articals')
+weeklyGraph.add_edge('rank_articals', 'final_selection')
+weeklyGraph.add_edge('final_selection', 'make_linkedin_post')
+weeklyGraph.add_edge('make_linkedin_post','review_post')
+weeklyGraph.add_edge('review_post', 'post_to_linkedin')
+weeklyGraph.add_edge('post_to_linkedin', END)
 
 if __name__ == "__main__":
     result = daily_workflow.invoke({})
