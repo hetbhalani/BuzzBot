@@ -70,6 +70,7 @@ def tavily_search(query: str = "", days_back: int = 1) -> list[dict]:
     """Search for recent news articles of AI."""
 
     try:
+        days_back = int(days_back)
         client = make_client(days_back)
         if client is None:
             return []

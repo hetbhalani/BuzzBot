@@ -111,6 +111,12 @@ def post_to_linkedin(state: WeeklyPipelineState):
     result = post_the_post(state["final_post"])
     return {"post_status": result}
 
+def retry_linkedin_post(state: WeeklyPipelineState):
+    if state["post_status"]["success"] == True:
+        return "END"
+    else:
+        return "post_to_linkedin"      
+    
 # Main Workflow
 graph = StateGraph(State)
 
@@ -142,13 +148,18 @@ weeklyGraph.add_node('post_to_linkedin', post_to_linkedin)
 
 
 weeklyGraph.add_edge(START, 'weekly_s3_get')
-weeklyGraph.add_edge('weeklyGraph.add_edge','deduplicate_news')
+weeklyGraph.add_edge('weekly_s3_get','deduplicate_news')
 weeklyGraph.add_edge('deduplicate_news', 'rank_articals')
 weeklyGraph.add_edge('rank_articals', 'final_selection')
 weeklyGraph.add_edge('final_selection', 'make_linkedin_post')
 weeklyGraph.add_edge('make_linkedin_post','review_post')
 weeklyGraph.add_edge('review_post', 'post_to_linkedin')
-weeklyGraph.add_edge('post_to_linkedin', END)
+weeklyGraph.add_conditional_edges('post_to_linkedin', retry_linkedin_post,{
+    "END": END,
+    "post_to_linkedin": "post_to_linkedin"
+})
+
+weekly_workflow = weeklyGraph.compile()
 
 if __name__ == "__main__":
-    result = daily_workflow.invoke({})
+    result = weekly_workflow.invoke({})

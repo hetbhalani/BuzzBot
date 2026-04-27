@@ -1,7 +1,8 @@
 import os
+import asyncio
 import html
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -175,7 +176,10 @@ def select_articles_via_telegram(articles: list[dict], mode: str = "daily", requ
             except Exception as e:
                 print(e)
 
-        # bot config/start
+        # bot config/start 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         app = Application.builder().token(BOT_TOKEN).post_init(send_selection_prompt).build()
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(handle_button))
@@ -240,16 +244,11 @@ def review_post_via_telegram(state: dict) -> dict:
         if query.data == "edit_post":
             await query.edit_message_reply_markup(reply_markup=None)
 
-            copy_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 Copy Draft", copy_text=CopyTextButton(text=draft))]
-            ])
-
             await query.message.reply_text(
-                "✏️ Tap <b>Copy Draft</b> below to copy the post to your clipboard.\n"
-                "Then paste it here, make your edits, and send it back!",
-                reply_markup=copy_keyboard,
+                "✏️ <b>Here is your draft post.</b> Long-press to copy it, make your edits, and send it back as a message:",
                 parse_mode="HTML",
             )
+            await query.message.reply_text(draft)
             return WAITING_FOR_EDIT
 
         if query.data == "post":
@@ -350,6 +349,9 @@ def review_post_via_telegram(state: dict) -> dict:
     )
 
     # start running the bot
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     app = (
         Application.builder()
         .token(BOT_TOKEN)
