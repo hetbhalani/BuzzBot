@@ -1,5 +1,5 @@
 project.docx
-buzzbot-key.pem
+BuzzBot.pem
 .venv
 .env
 test.ipynb
