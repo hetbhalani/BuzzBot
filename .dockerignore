@@ -1,0 +1,22 @@
+# Ignore git files
+.git
+.gitignore
+.github
+
+# Ignore Python cache and virtual environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Ignore sensitive files (they shouldn't be in the container, Docker Compose maps them)
+.env
+buzzbot-key.pem
+
+# Ignore local Jupyter notebooks and testing artifacts
+*.ipynb
+tests/
+s3_output.json
