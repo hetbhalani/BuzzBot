@@ -4,8 +4,6 @@ import json
 import os
 from botocore.exceptions import ClientError
 from pipelines.tavily_search_tool import tavily_search
-from bot.telegram_bot import select_articles_via_telegram
-
 
 BUCKET_NAME = os.environ.get("BUCKET_NAME")
 

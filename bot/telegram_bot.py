@@ -19,178 +19,138 @@ load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def select_articles_via_telegram(articles: list[dict], mode: str = "daily", required_count: int = 5) -> list[dict]:
-    try:
-        if not articles:
-            return []
+import json
+import redis as redis_lib
+from langgraph.types import Command
 
-        selected: set[int] = set()
-        chosen_articles: list[dict] = []
+def save_active_session(mode: str, thread_id: str):
+    r = redis_lib.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+    r.set("buzzbot:active_session", json.dumps({"mode": mode, "thread_id": thread_id}))
 
-        # text shows above the buttons
-        def build_prompt_text() -> str:
-            try:
-                article_lines = []
-                for i, article in enumerate(articles):
-                    title = article.get("title")
-                    
-                    # remove the name of the source
-                    if title and "-" in title:
-                        final_title = title[:title.rfind("-")].strip()
-                    else:
-                        final_title = title
-                    
-                    # get the url and escape it for HTML                        
-                    url = article.get("url", "")
-                    safe_title = html.escape(final_title)
-                    safe_url = html.escape(url, quote=True)
+def send_selection_prompt(articles: list[dict], mode: str = "daily"):
+    required_count = 5 if mode == "weekly" else 0
+    
+    def build_prompt_text():
+        article_lines = []
+        for i, article in enumerate(articles):
+            title = article.get("title")
+            final_title = title[:title.rfind("-")].strip() if title and "-" in title else title
+            url = article.get("url", "")
+            safe_title = html.escape(final_title)
+            safe_url = html.escape(url, quote=True)
+            if safe_url:
+                article_lines.append(f'{i + 1}. {safe_title} - <a href="{safe_url}">Read here</a>\n')
+            else:
+                article_lines.append(f"{i + 1}. {safe_title}\n")
+        
+        if mode == "weekly":
+            header = ["🏆 Weekly Top 10 Review", "", f"Please select exactly {required_count} articles to feature in the newsletter."]
+        else:
+            header = ["📰 Daily AI News Curator", "", "Review the stories below and tap to select the ones you want to keep."]
+        
+        return "\n".join(header + ["", f"📚 Total stories: {len(articles)}\n", *article_lines])
 
-                    # make a clickable link to the news
-                    if safe_url:
-                        article_lines.append(f"{i + 1}. {safe_title} - <a href=\"{safe_url}\">Read here</a>\n")
-                    else:
-                        article_lines.append(f"{i + 1}. {safe_title}\n")
+    def build_keyboard(selected_set):
+        buttons = []
+        for i, article in enumerate(articles):
+            title = article.get("title")
+            final_title = title[:title.rfind("-")].strip() if title and "-" in title else title
+            preview = (final_title[:28].rstrip() + "...") if len(final_title) > 31 else final_title
+            label = f"{i + 1}. {preview}  ✅" if i in selected_set else f"{i + 1}. {preview}"
+            buttons.append([InlineKeyboardButton(label, callback_data=f"toggle:{i}")])
+        buttons.append([
+            InlineKeyboardButton("✅ Select All", callback_data="select_all"),
+            InlineKeyboardButton("🧹 Clear", callback_data="clear_all"),
+        ])
+        buttons.append([InlineKeyboardButton("🚀 Save & Finish", callback_data="done")])
+        return InlineKeyboardMarkup(buttons)
 
-                if mode == "weekly":
-                    header = [
-                        "🏆 Weekly Top 10 Review",
-                        "",
-                        f"Please select exactly {required_count} articles to feature in the newsletter.",
-                    ]
-                else:
-                    header = [
-                        "📰 Daily AI News Curator",
-                        "",
-                        "Review the stories below and tap to select the ones you want to keep.",
-                    ]
-                    
-                lines = header + [
-                    "",
-                    f"📚 Total stories: {len(articles)}\n",
-                    *article_lines,
-                ]
+    async def _send():
+        from telegram import Bot
+        bot = Bot(token=BOT_TOKEN)
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=build_prompt_text(),
+            reply_markup=build_keyboard(set()),
+            parse_mode="HTML",
+        )
+        print(f"[Telegram] {mode} selection prompt sent")
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(_send())
+    loop.close()
+
+def start_persistent_bot():
+    async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        r = redis_lib.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+        session_data = r.get("buzzbot:active_session")
+        if not session_data:
+            await query.edit_message_text("No active session found.")
+            return
+            
+        session = json.loads(session_data)
+        mode = session["mode"]
+        thread_id = session["thread_id"]
+        config = {"configurable": {"thread_id": thread_id}}
+
+        from workflow import daily_workflow, weekly_workflow
+        workflow = daily_workflow if mode == "daily" else weekly_workflow
+        
+        state_snapshot = workflow.get_state(config)
+        articles = state_snapshot.values.get("raw_news" if mode == "daily" else "top_news", [])
+
+        # Build keyboard inside closure to access current articles
+        def build_keyboard(selected_set):
+            buttons = []
+            for i, article in enumerate(articles):
+                title = article.get("title")
+                final_title = title[:title.rfind("-")].strip() if title and "-" in title else title
+                preview = (final_title[:28].rstrip() + "...") if len(final_title) > 31 else final_title
+                label = f"{i + 1}. {preview}  ✅" if i in selected_set else f"{i + 1}. {preview}"
+                buttons.append([InlineKeyboardButton(label, callback_data=f"toggle:{i}")])
+            buttons.append([
+                InlineKeyboardButton("✅ Select All", callback_data="select_all"),
+                InlineKeyboardButton("🧹 Clear", callback_data="clear_all"),
+            ])
+            buttons.append([InlineKeyboardButton("🚀 Save & Finish", callback_data="done")])
+            return InlineKeyboardMarkup(buttons)
+
+        selected = context.user_data.get("selected", set())
+
+        if query.data == "done":
+            chosen = [articles[i] for i in sorted(selected)]
+            context.user_data["selected"] = set() 
+            
+            await query.edit_message_text(f"✅ Saved {len(chosen)} articles. Resuming workflow...")
+            if mode == "weekly":
+                context.application.stop_running()
                 
-                return "\n".join(lines)
+            workflow.invoke(Command(resume=chosen), config=config)
+            return
 
-            except Exception as e:
-                print(e)
-                return "No articles available."
+        if query.data == "select_all":
+            selected.update(range(len(articles)))
+        elif query.data == "clear_all":
+            selected.clear()
+        elif query.data.startswith("toggle:"):
+            idx = int(query.data.split(":")[1])
+            if idx in selected:
+                selected.remove(idx)
+            else:
+                selected.add(idx)
 
-        # make all buttons
-        def build_keyboard() -> InlineKeyboardMarkup:
-            try:
-                buttons = []
-                for i, article in enumerate(articles):
-                    title = article.get("title")
-                    final_title = title[:title.rfind("-")].strip() if title and "-" in title else title
-                    preview = (final_title[:28].rstrip() + "...") if len(final_title) > 31 else final_title
-                    label = f"{i + 1}. {preview}"
-                    if i in selected:
-                        label = f"{label}  ✅"
-                    buttons.append([InlineKeyboardButton(label, callback_data=f"toggle:{i}")])
+        context.user_data["selected"] = selected
+        await query.edit_message_reply_markup(reply_markup=build_keyboard(selected))
 
-                buttons.append(
-                    [
-                        InlineKeyboardButton("✅ Select All", callback_data="select_all"),
-                        InlineKeyboardButton("🧹 Clear", callback_data="clear_all"),
-                    ]
-                )
-                buttons.append([InlineKeyboardButton("🚀 Save & Finish", callback_data="done")])
-                return InlineKeyboardMarkup(buttons)
-            except Exception as e:
-                print(e)
-                return InlineKeyboardMarkup([])
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CallbackQueryHandler(handle_button))
+    print("[PersistentBot] Polling for interactions...")
+    app.run_polling()
 
-        # initialize the bot-session
-        async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            try:
-                selected.clear()
-                await update.message.reply_text(
-                    build_prompt_text(),
-                    reply_markup=build_keyboard(),
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                print(e)
 
-        # auto /start the bot
-        async def send_selection_prompt(app: Application):
-            try:
-                selected.clear()
-                await app.bot.send_message(
-                    chat_id=CHAT_ID,
-                    text=build_prompt_text(),
-                    reply_markup=build_keyboard(),
-                    parse_mode="HTML",
-                )
-                print("Auto selection prompt sent")
-            except Exception as e:
-                print(e)
-
-        # button logic
-        async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            try:
-                query = update.callback_query
-                await query.answer()
-
-                if query.data == "done":
-                    if mode == "weekly" and required_count and len(selected) != required_count:
-                        await query.answer(f"⚠️ Please select exactly {required_count} articles! You have {len(selected)}.", 
-                            show_alert=True
-                        )
-                        return
-                        
-                    chosen = [articles[i] for i in sorted(selected)]
-                    chosen_articles.clear()
-                    chosen_articles.extend(chosen)
-
-                    titles = "\n".join(f"• {a.get('title', 'Untitled')}" for a in chosen)
-                    if chosen:
-                        await query.edit_message_text(
-                            f"🎉 Saved {len(chosen)} curated articles.\n\n{titles}\n\nBot session complete."
-                        )
-                    else:
-                        await query.edit_message_text(
-                            "ℹ️ No articles were selected.\n\nBot session complete."
-                        )
-
-                    context.application.stop_running()
-                    return
-
-                if query.data == "select_all":
-                    selected.update(range(len(articles)))
-                    await query.edit_message_reply_markup(reply_markup=build_keyboard())
-                    return
-
-                if query.data == "clear_all":
-                    selected.clear()
-                    await query.edit_message_reply_markup(reply_markup=build_keyboard())
-                    return
-
-                index = int(query.data.split(":", 1)[1])
-                if index in selected:
-                    selected.discard(index)
-                else:
-                    selected.add(index)
-                await query.edit_message_reply_markup(reply_markup=build_keyboard())
-            except Exception as e:
-                print(e)
-
-        # bot config/start 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        app = Application.builder().token(BOT_TOKEN).post_init(send_selection_prompt).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CallbackQueryHandler(handle_button))
-
-        print("Bot running")
-        app.run_polling() # keep the bot running
-
-        return chosen_articles
-    except Exception as e:
-        print(e)
-        return []
 
 WAITING_FOR_PROMPT = 1  # bot is waiting for the user to type a prompt
 WAITING_FOR_EDIT = 2    # bot is waiting for the user to send back the edited post

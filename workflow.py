@@ -1,7 +1,10 @@
 import datetime
+import os
 from typing import Optional, TypedDict
 from langgraph.graph import END, START, StateGraph
-from bot.telegram_bot import select_articles_via_telegram, review_post_via_telegram
+from langgraph.types import interrupt, Command
+from langgraph.checkpoint.redis import RedisSaver
+from bot.telegram_bot import review_post_via_telegram, send_selection_prompt
 from pipelines.tavily_search_tool import tavily_search
 from storage.s3_client import s3_post, s3_get
 from pipelines.news_ranker import news_ranker
@@ -47,12 +50,12 @@ def daily_tavily_search(state: DailyPipelineState):
         return {"errors": [str(e)]}
 
 def daily_telegram_bot(state: DailyPipelineState):
-    try:
-        selected_articles = select_articles_via_telegram(state["raw_news"])
-        return {"top_news": selected_articles}
-    except Exception as e:
-        print(e)
-        return {"errors": [str(e)]}
+    send_selection_prompt(state["raw_news"], mode="daily")
+    
+    # pause the graph and save state to Redis
+    selected = interrupt("waiting_for_daily_selection")
+    
+    return {"top_news": selected}
     
 def daily_s3_post(state: DailyPipelineState):
     try:
@@ -86,9 +89,9 @@ def rank_articals(state: WeeklyPipelineState):
     return {"top_news": top_10}
 
 def final_selection(state: WeeklyPipelineState):
-    final_news = select_articles_via_telegram(articles=state["top_news"], mode="weekly")
-
-    return {"final_news": final_news}
+    send_selection_prompt(state["top_news"], mode="weekly")
+    selected = interrupt("waiting_for_weekly_selection")
+    return {"final_news": selected}
 
 def make_linkedin_post(state: WeeklyPipelineState):
     draft = draft_post(state)
@@ -159,7 +162,12 @@ weeklyGraph.add_conditional_edges('post_to_linkedin', retry_linkedin_post,{
     "post_to_linkedin": "post_to_linkedin"
 })
 
-weekly_workflow = weeklyGraph.compile()
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+checkpointer = RedisSaver.from_conn_string(REDIS_URL)
+checkpointer.setup()
+
+daily_workflow = dailyGraph.compile(checkpointer=checkpointer)
+weekly_workflow = weeklyGraph.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
-    result = weekly_workflow.invoke({})
+    pass
