@@ -96,11 +96,13 @@ def start_persistent_bot():
         thread_id = session["thread_id"]
         config = {"configurable": {"thread_id": thread_id}}
 
-        from workflow import daily_workflow, weekly_workflow
-        workflow = daily_workflow if mode == "daily" else weekly_workflow
+        from workflow import master_workflow
         
-        state_snapshot = workflow.get_state(config)
-        articles = state_snapshot.values.get("raw_news" if mode == "daily" else "top_news", [])
+        state_snapshot = master_workflow.get_state(config)
+        if mode == "daily":
+            articles = state_snapshot.values.get("raw_news", [])
+        else:
+            articles = state_snapshot.values.get("top_news", [])
 
         # Build keyboard inside closure to access current articles
         def build_keyboard(selected_set):
@@ -128,7 +130,7 @@ def start_persistent_bot():
             if mode == "weekly":
                 context.application.stop_running()
                 
-            workflow.invoke(Command(resume=chosen), config=config)
+            master_workflow.invoke(Command(resume=chosen), config=config)
             return
 
         if query.data == "select_all":

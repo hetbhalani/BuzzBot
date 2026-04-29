@@ -20,5 +20,22 @@ services:
       - redis
     restart: unless-stopped
 
+  airflow:
+    build: .
+    command: airflow standalone
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    volumes:
+      - ./dags:/app/dags
+      - airflow_data:/root/airflow
+    depends_on:
+      - redis
+    restart: unless-stopped
+
 volumes:
   redis_data:
+  airflow_data:
