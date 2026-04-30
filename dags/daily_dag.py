@@ -8,7 +8,12 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 def run_workflow():
-    master_workflow.invoke({"today": datetime.now().strftime("%Y-%m-%d")})
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    thread_id = f"buzzbot_{today_str}"
+    
+    config = {"configurable": {"thread_id": thread_id}}
+    
+    master_workflow.invoke({"today": today_str}, config=config)
 
 with DAG(
     dag_id='buzzbot',
