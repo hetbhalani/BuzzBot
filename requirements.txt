@@ -1,6 +1,7 @@
 boto3
 python-dotenv
 langgraph
+langgraph-checkpoint-redis
 langchain
 langchain-core
 langchain-groq
