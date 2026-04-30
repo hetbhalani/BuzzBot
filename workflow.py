@@ -1,5 +1,6 @@
 import datetime
 import os
+import redis
 from typing import Optional, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt, Command
@@ -185,7 +186,8 @@ master_graph.add_edge("daily_subgraph", END)
 master_graph.add_edge("weekly_subgraph", END)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-checkpointer = RedisSaver.from_conn_string(REDIS_URL)
+redis_client = redis.Redis.from_url(REDIS_URL)
+checkpointer = RedisSaver(redis_client)
 checkpointer.setup()
 
 master_workflow = master_graph.compile(checkpointer=checkpointer)
