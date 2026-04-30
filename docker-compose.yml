@@ -29,6 +29,7 @@ services:
       - .env
     environment:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__DAGS_FOLDER=/app/dags
     volumes:
       - ./dags:/app/dags
       - airflow_data:/root/airflow
