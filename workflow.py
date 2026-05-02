@@ -126,6 +126,7 @@ def retry_linkedin_post(state: MasterState):
 # Daily graph
 dailyGraph = StateGraph(MasterState)
 
+dailyGraph.add_node('daily_tavily_search', daily_tavily_search)
 dailyGraph.add_node('daily_send_prompt', daily_send_prompt)
 dailyGraph.add_node('daily_wait_for_selection', daily_wait_for_selection)
 dailyGraph.add_node('daily_s3_post', daily_s3_post)
