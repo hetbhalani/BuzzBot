@@ -15,22 +15,18 @@ queries = [
 ]
 
 def make_client(days_back: int) -> TavilySearch:
-    try:
-        end_date = datetime.date.today()
-        start_date = end_date - datetime.timedelta(days=days_back)
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=days_back)
 
-        end_date_str = end_date.strftime("%Y-%m-%d")
-        start_date_str = start_date.strftime("%Y-%m-%d")
+    end_date_str = end_date.strftime("%Y-%m-%d")
+    start_date_str = start_date.strftime("%Y-%m-%d")
 
-        return TavilySearch(
-            max_results=2,
-            topic="news",
-            start_date=start_date_str,
-            end_date=end_date_str
-        )
-    except Exception as e:
-        print(e)
-        return None
+    return TavilySearch(
+        max_results=2,
+        topic="news",
+        start_date=start_date_str,
+        end_date=end_date_str
+    )
     
 def dedup(results) -> list[dict]:
     try:
@@ -69,20 +65,14 @@ def dedup(results) -> list[dict]:
 def tavily_search(query: str = "", days_back: int = 1) -> list[dict]:
     """Search for recent news articles of AI."""
 
-    try:
-        days_back = int(days_back)
-        client = make_client(days_back)
-        if client is None:
-            return []
+    days_back = int(days_back)
+    client = make_client(days_back)
 
-        if query:
-            results = client.invoke(query)
-            return dedup(results)
+    if query:
+        results = client.invoke(query)
+        return dedup(results)
 
-        with ThreadPoolExecutor() as executor:
-            batches = list(executor.map(client.invoke, queries))
+    with ThreadPoolExecutor() as executor:
+        batches = list(executor.map(client.invoke, queries))
 
-        return dedup(batches)
-    except Exception as e:
-        print(e)
-        return []
+    return dedup(batches)
