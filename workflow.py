@@ -1,6 +1,7 @@
 import datetime
 import os
 from typing import Optional, TypedDict
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt, Command
 from langgraph.checkpoint.redis import RedisSaver
@@ -40,7 +41,7 @@ def daily_tavily_search(state: MasterState):
         print(e)
         return {"errors": [str(e)]}
 
-def daily_telegram_bot(state: MasterState, config: dict):
+def daily_telegram_bot(state: MasterState, config: RunnableConfig):
     thread_id = config["configurable"]["thread_id"]
     save_active_session("daily", thread_id)
     send_selection_prompt(state.get("raw_news", []), mode="daily")
@@ -81,7 +82,7 @@ def rank_articals(state: MasterState):
 
     return {"top_news": top_10}
 
-def final_selection(state: MasterState, config: dict):
+def final_selection(state: MasterState, config: RunnableConfig):
     thread_id = config["configurable"]["thread_id"]
     save_active_session("weekly", thread_id)
     send_selection_prompt(state.get("top_news", []), mode="weekly")
