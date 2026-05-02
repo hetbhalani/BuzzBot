@@ -76,9 +76,16 @@ def send_selection_prompt(articles: list[dict], mode: str = "daily"):
         )
         print(f"[Telegram] {mode} selection prompt sent")
 
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(_send())
-    loop.close()
+    import threading
+    def _run_in_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_send())
+        loop.close()
+
+    t = threading.Thread(target=_run_in_thread)
+    t.start()
+    t.join()
 
 def start_persistent_bot():
     async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,20 +317,26 @@ def review_post_via_telegram(state: dict) -> dict:
         fallbacks=[],
     )
 
-    # start running the bot
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    import threading
+    def _run_in_thread():
+        # start running the bot
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .post_init(send_draft)
-        .build()
-    )
-    app.add_handler(conv_handler)
+        app = (
+            Application.builder()
+            .token(BOT_TOKEN)
+            .post_init(send_draft)
+            .build()
+        )
+        app.add_handler(conv_handler)
 
-    print("Bot running...")
-    app.run_polling()
+        print("Bot running...")
+        app.run_polling()
+        
+    t = threading.Thread(target=_run_in_thread)
+    t.start()
+    t.join()
 
     # merge result back into the original state and return
     return {**state, **result}
