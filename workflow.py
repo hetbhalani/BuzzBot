@@ -41,14 +41,14 @@ def daily_tavily_search(state: MasterState):
         print(e)
         return {"errors": [str(e)]}
 
-def daily_telegram_bot(state: MasterState, config: RunnableConfig):
+def daily_send_prompt(state: MasterState, config: RunnableConfig):
     thread_id = config["configurable"]["thread_id"]
     save_active_session("daily", thread_id)
     send_selection_prompt(state.get("raw_news", []), mode="daily")
-    
-    # pause the graph and save state to Redis
+    return {}
+
+def daily_wait_for_selection(state: MasterState):
     selected = interrupt("waiting_for_daily_selection")
-    
     return {"top_news": selected}
     
 def daily_s3_post(state: MasterState):
@@ -82,10 +82,13 @@ def rank_articals(state: MasterState):
 
     return {"top_news": top_10}
 
-def final_selection(state: MasterState, config: RunnableConfig):
+def weekly_send_prompt(state: MasterState, config: RunnableConfig):
     thread_id = config["configurable"]["thread_id"]
     save_active_session("weekly", thread_id)
     send_selection_prompt(state.get("top_news", []), mode="weekly")
+    return {}
+
+def weekly_wait_for_selection(state: MasterState):
     selected = interrupt("waiting_for_weekly_selection")
     return {"final_news": selected}
 
@@ -123,13 +126,14 @@ def retry_linkedin_post(state: MasterState):
 # Daily graph
 dailyGraph = StateGraph(MasterState)
 
-dailyGraph.add_node('daily_tavily_search', daily_tavily_search)
-dailyGraph.add_node('daily_telegram_bot', daily_telegram_bot)
+dailyGraph.add_node('daily_send_prompt', daily_send_prompt)
+dailyGraph.add_node('daily_wait_for_selection', daily_wait_for_selection)
 dailyGraph.add_node('daily_s3_post', daily_s3_post)
 
 dailyGraph.add_edge(START, 'daily_tavily_search')
-dailyGraph.add_edge('daily_tavily_search', 'daily_telegram_bot')
-dailyGraph.add_edge('daily_telegram_bot', 'daily_s3_post')
+dailyGraph.add_edge('daily_tavily_search', 'daily_send_prompt')
+dailyGraph.add_edge('daily_send_prompt', 'daily_wait_for_selection')
+dailyGraph.add_edge('daily_wait_for_selection', 'daily_s3_post')
 dailyGraph.add_edge('daily_s3_post', END)
 
 daily_workflow = dailyGraph.compile()
@@ -140,7 +144,8 @@ weeklyGraph = StateGraph(MasterState)
 weeklyGraph.add_node('weekly_s3_get', weekly_s3_get)
 weeklyGraph.add_node('deduplicate_news', deduplicate_news)
 weeklyGraph.add_node('rank_articals', rank_articals)
-weeklyGraph.add_node('final_selection',final_selection)
+weeklyGraph.add_node('weekly_send_prompt', weekly_send_prompt)
+weeklyGraph.add_node('weekly_wait_for_selection', weekly_wait_for_selection)
 weeklyGraph.add_node('make_linkedin_post', make_linkedin_post)
 weeklyGraph.add_node('review_post', review_post)
 weeklyGraph.add_node('post_to_linkedin', post_to_linkedin)
@@ -149,8 +154,9 @@ weeklyGraph.add_node('post_to_linkedin', post_to_linkedin)
 weeklyGraph.add_edge(START, 'weekly_s3_get')
 weeklyGraph.add_edge('weekly_s3_get','deduplicate_news')
 weeklyGraph.add_edge('deduplicate_news', 'rank_articals')
-weeklyGraph.add_edge('rank_articals', 'final_selection')
-weeklyGraph.add_edge('final_selection', 'make_linkedin_post')
+weeklyGraph.add_edge('rank_articals', 'weekly_send_prompt')
+weeklyGraph.add_edge('weekly_send_prompt', 'weekly_wait_for_selection')
+weeklyGraph.add_edge('weekly_wait_for_selection', 'make_linkedin_post')
 weeklyGraph.add_edge('make_linkedin_post','review_post')
 weeklyGraph.add_edge('review_post', 'post_to_linkedin')
 weeklyGraph.add_conditional_edges('post_to_linkedin', retry_linkedin_post,{
