@@ -29,7 +29,10 @@ def save_active_session(mode: str, thread_id: str):
 
 def send_selection_prompt(articles: list[dict], mode: str = "daily"):
     required_count = 5 if mode == "weekly" else 0
-    
+
+    r = redis_lib.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+    r.set(f"buzzbot:{mode}_articles", json.dumps(articles))
+
     def build_prompt_text():
         article_lines = []
         for i, article in enumerate(articles):
@@ -104,12 +107,9 @@ def start_persistent_bot():
         config = {"configurable": {"thread_id": thread_id}}
 
         from workflow import master_workflow
-        
-        state_snapshot = master_workflow.get_state(config)
-        if mode == "daily":
-            articles = state_snapshot.values.get("raw_news", [])
-        else:
-            articles = state_snapshot.values.get("top_news", [])
+
+        articles_raw = r.get(f"buzzbot:{mode}_articles")
+        articles = json.loads(articles_raw) if articles_raw else []
 
         # Build keyboard inside closure to access current articles
         def build_keyboard(selected_set):
