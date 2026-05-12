@@ -77,7 +77,7 @@ def deduplicate_news(state: MasterState):
     return {"all_news": unique}
 
 
-def rank_articals(state: MasterState):
+def rank_articles(state: MasterState):
     top_10 = news_ranker(state)
 
     return {"top_news": top_10}
@@ -144,7 +144,7 @@ weeklyGraph = StateGraph(MasterState)
 
 weeklyGraph.add_node('weekly_s3_get', weekly_s3_get)
 weeklyGraph.add_node('deduplicate_news', deduplicate_news)
-weeklyGraph.add_node('rank_articals', rank_articals)
+weeklyGraph.add_node('rank_articles', rank_articles)
 weeklyGraph.add_node('weekly_send_prompt', weekly_send_prompt)
 weeklyGraph.add_node('weekly_wait_for_selection', weekly_wait_for_selection)
 weeklyGraph.add_node('make_linkedin_post', make_linkedin_post)
@@ -154,8 +154,8 @@ weeklyGraph.add_node('post_to_linkedin', post_to_linkedin)
 
 weeklyGraph.add_edge(START, 'weekly_s3_get')
 weeklyGraph.add_edge('weekly_s3_get','deduplicate_news')
-weeklyGraph.add_edge('deduplicate_news', 'rank_articals')
-weeklyGraph.add_edge('rank_articals', 'weekly_send_prompt')
+weeklyGraph.add_edge('deduplicate_news', 'rank_articles')
+weeklyGraph.add_edge('rank_articles', 'weekly_send_prompt')
 weeklyGraph.add_edge('weekly_send_prompt', 'weekly_wait_for_selection')
 weeklyGraph.add_edge('weekly_wait_for_selection', 'make_linkedin_post')
 weeklyGraph.add_edge('make_linkedin_post','review_post')
