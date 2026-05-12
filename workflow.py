@@ -5,7 +5,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt, Command
 from langgraph.checkpoint.redis import RedisSaver
-from bot.telegram_bot import review_post_via_telegram, send_selection_prompt, save_active_session
+from bot.telegram_bot import send_selection_prompt, send_review_prompt, save_active_session
 from pipelines.tavily_search_tool import tavily_search
 from storage.s3_client import s3_post, s3_get
 from pipelines.news_ranker import news_ranker
@@ -97,17 +97,27 @@ def make_linkedin_post(state: MasterState):
 
     return {"draft_post": draft}
 
-def review_post(state: MasterState):
-    updated_state = review_post_via_telegram(state)
+def weekly_send_review_prompt(state: MasterState, config: RunnableConfig):
+    thread_id = config["configurable"]["thread_id"]
+    send_review_prompt(state.get("draft_post", ""), thread_id)
+    return {}
 
-    approve_status = updated_state.get("approve_status")
+def weekly_wait_for_review(state: MasterState):
+    review_decision = interrupt("waiting_for_weekly_review")
+
+    approve_status = review_decision.get("approve_status")
 
     if approve_status == "post":
-        final_post = updated_state.get("draft_post") # original draft as it is
+        final_post = state.get("draft_post")
     else:
-        final_post = updated_state.get("edited_response", updated_state.get("draft_post"))  # LLM or manual edit
+        final_post = review_decision.get("edited_response", state.get("draft_post"))
 
-    return {**updated_state, "final_post": final_post}
+    return {
+        "approve_status": approve_status,
+        "user_prompt": review_decision.get("user_prompt"),
+        "edited_response": review_decision.get("edited_response"),
+        "final_post": final_post,
+    }
 
 def post_to_linkedin(state: MasterState):
     result = post_the_post(state.get("final_post", ""))
@@ -148,7 +158,8 @@ weeklyGraph.add_node('rank_articles', rank_articles)
 weeklyGraph.add_node('weekly_send_prompt', weekly_send_prompt)
 weeklyGraph.add_node('weekly_wait_for_selection', weekly_wait_for_selection)
 weeklyGraph.add_node('make_linkedin_post', make_linkedin_post)
-weeklyGraph.add_node('review_post', review_post)
+weeklyGraph.add_node('weekly_send_review_prompt', weekly_send_review_prompt)
+weeklyGraph.add_node('weekly_wait_for_review', weekly_wait_for_review)
 weeklyGraph.add_node('post_to_linkedin', post_to_linkedin)
 
 
@@ -158,8 +169,9 @@ weeklyGraph.add_edge('deduplicate_news', 'rank_articles')
 weeklyGraph.add_edge('rank_articles', 'weekly_send_prompt')
 weeklyGraph.add_edge('weekly_send_prompt', 'weekly_wait_for_selection')
 weeklyGraph.add_edge('weekly_wait_for_selection', 'make_linkedin_post')
-weeklyGraph.add_edge('make_linkedin_post','review_post')
-weeklyGraph.add_edge('review_post', 'post_to_linkedin')
+weeklyGraph.add_edge('make_linkedin_post','weekly_send_review_prompt')
+weeklyGraph.add_edge('weekly_send_review_prompt', 'weekly_wait_for_review')
+weeklyGraph.add_edge('weekly_wait_for_review', 'post_to_linkedin')
 weeklyGraph.add_conditional_edges('post_to_linkedin', retry_linkedin_post,{
     "END": END,
     "post_to_linkedin": "post_to_linkedin"
